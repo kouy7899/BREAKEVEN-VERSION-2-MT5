@@ -1,0 +1,136 @@
+//+------------------------------------------------------------------+
+//|                                                    BREAKEVEN.mq5 |
+//|                                  Copyright 2024, MetaQuotes Ltd. |
+//|                                             https://www.mql5.com |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2024, MetaQuotes Ltd."
+#property link      "https://www.mql5.com"
+#property version   "1.00"
+
+#include <Trade/Trade.mqh>
+CTrade trade;
+
+// Input parameters
+input bool BreakevenMode = true;
+input double BreakEven_After_Pts = 50;
+input double BreakEven_At_Pts = 50;
+
+input bool TrailingMode = true;
+input int Trail_Stop = 100;
+input int Trail_Step = 50;
+input int Trail_Gap = 50;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit() {
+    //---
+    return(INIT_SUCCEEDED);
+}
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason) {
+    //---
+}
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick() {
+  // Check for existing open orders
+   if (PositionsTotal() == 0)
+     {
+      // Open a buy order
+      if(!trade.Buy(0.01))
+        {
+         Print("Error opening buy order: ", trade.ResultRetcode());
+        }
+
+      // Open a sell order
+      if(!trade.Sell(0.01))
+        {
+         Print("Error opening sell order: ", trade.ResultRetcode());
+        }
+     }
+    // Loop through all open positions
+    for (int i = PositionsTotal() - 1; i >= 0; i--) {
+        ulong ticket = PositionGetTicket(i);
+
+        // Apply BreakEven if enabled
+        if (BreakevenMode) {
+            breakEven(ticket, BreakEven_After_Pts, BreakEven_At_Pts);
+        }
+
+        // Apply TrailingStop if enabled
+        if (TrailingMode) {
+            trailingStop(ticket, Trail_Stop, Trail_Step, Trail_Gap);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+// BreakEven function
+void breakEven(ulong ticket, double breakEvenAfterPts, double breakEvenAtPts) {
+    double price = PositionGetDouble(POSITION_PRICE_OPEN);
+    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+    double stopLoss = PositionGetDouble(POSITION_SL);
+    double profit = PositionGetDouble(POSITION_PROFIT);
+
+    // Calculate the profit in points
+    double profitInPoints = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ?
+                             (currentPrice - price) / Point() :
+                             (price - currentPrice) / Point();
+
+    Print("Profit in Points: ", profitInPoints, " | Required: ", breakEvenAfterPts);
+    Print("Current Stop Loss: ", stopLoss);
+
+    // Check if the order is profitable and has reached the break-even level
+    if (profitInPoints >= breakEvenAfterPts) {
+        // Move the stop loss to the entry price plus buffer
+        if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+            double newStopLoss = price + breakEvenAtPts * Point();
+            Print("New Stop Loss for BUY: ", newStopLoss);
+            if (newStopLoss > stopLoss) {
+                bool modified = trade.PositionModify(ticket, newStopLoss, PositionGetDouble(POSITION_TP));
+                if (modified) {
+                    Print("BUY position stop loss modified to: ", newStopLoss);
+                } else {
+                    Print("Error modifying BUY position stop loss: ", trade.ResultRetcode());
+                }
+            }
+        } else if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
+            double newStopLoss = price - breakEvenAtPts * Point();
+            Print("New Stop Loss for SELL: ", newStopLoss);
+            if (newStopLoss < stopLoss || stopLoss == 0) { // Also check if stopLoss is not set yet
+                bool modified = trade.PositionModify(ticket, newStopLoss, PositionGetDouble(POSITION_TP));
+                if (modified) {
+                    Print("SELL position stop loss modified to: ", newStopLoss);
+                } else {
+                    Print("Error modifying SELL position stop loss: ", trade.ResultRetcode());
+                }
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+// TrailingStop function
+void trailingStop(ulong ticket, double trailStop, double trailStep, double trailGap) {
+    double price = PositionGetDouble(POSITION_PRICE_OPEN);
+    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+    double stopLoss = PositionGetDouble(POSITION_SL);
+
+    // Calculate new stop loss
+    double newStopLoss;
+    if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+        newStopLoss = currentPrice - trailStop * Point();
+        if (newStopLoss > stopLoss + trailStep * Point() && newStopLoss > price + trailGap * Point()) { // Ensure trailing stop only moves forward
+            trade.PositionModify(ticket, newStopLoss, PositionGetDouble(POSITION_TP));
+        }
+    } else if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
+        newStopLoss = currentPrice + trailStop * Point();
+        if (newStopLoss < stopLoss - trailStep * Point() && newStopLoss < price - trailGap * Point()) { // Ensure trailing stop only moves forward
+            trade.PositionModify(ticket, newStopLoss, PositionGetDouble(POSITION_TP));
+        }
+    }
+}
